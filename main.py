@@ -1,184 +1,198 @@
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.exceptions import RequestValidationError
+from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
-from typing import Optional, Any
-from datetime import datetime, UTC , timezone
+from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime
 
 app = FastAPI(
-    title="Cinema Ticket Booking API"
+    title="Team Task Manager API",
+    description="Hệ thống API quản lý công việc nhóm - Rikkei Education Mini Project",
+    version="1.0.0"
 )
 
-tickets_db = [
+tasks_db: List[Dict[str, Any]] = [
     {
-        "id": 1,
-        "movie_name": "Doctor Strange 3",
-        "room_code": "IMAX-01",
-        "quantity": 2,
-        "status": "confirmed",
-        "created_at": "2026-07-01T19:00:00Z"
+        "id": 1, 
+        "title": "Thiet ke database Shop AI", 
+        "description": "Xay dung bang va toi uu index", 
+        "assignee": "QuyDev", 
+        "priority": 1, 
+        "status": "todo",
+        "created_at": "2026-07-01T09:00:00Z"
     },
     {
-        "id": 2,
-        "movie_name": "Avatar 3",
-        "room_code": "PREMIUM-02",
-        "quantity": 1,
-        "status": "confirmed",
-        "created_at": "2026-07-01T20:15:00Z"
+        "id": 2, 
+        "title": "Code bo API Authen", 
+        "description": "Trien khai filter verify JWT token", 
+        "assignee": "FixerQ", 
+        "priority": 2, 
+        "status": "done",
+        "created_at": "2026-07-01T10:00:00Z"
     }
 ]
 
-class APIResponse(BaseModel):
-    statusCode: int
-    message: str
-    data: Optional[Any]
-    error: Optional[Any]
-    timestamp: str
-    path: str
+class TaskCreateSchema(BaseModel):
+    title: str = Field(..., min_length=3, max_length=100)
+    description: str = Field(..., min_length=1)
+    assignee: str = Field(..., min_length=1)
+    priority: int = Field(..., ge=1, le=5)
 
+    class Config:
+        anystr_strip_whitespace = True
 
-class TicketCreate(BaseModel):
-    movie_name: str = Field(..., min_length=1)
-    room_code: str = Field(..., min_length=1)
-    quantity: int = Field(..., ge=1, le=10)
+class TaskStatusUpdateSchema(BaseModel):
+    status: str = Field(..., description="Trạng thái mới của công việc (ví dụ: todo, in_progress, done)")
 
-
-def responseOTD(
+def create_unified_response(
     status_code: int,
     message: str,
-    data: Any,
-    error: Any,
-    path: str
-):
-    return {
+    data: Any = None,
+    error: Optional[str] = None,
+    path: str = ""
+) -> JSONResponse:
+    envelope = {
         "statusCode": status_code,
         "message": message,
         "data": data,
         "error": error,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
         "path": path
     }
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-
-    detail = exc.detail
-
-    if isinstance(detail, dict):
-        message = detail.get("message")
-        error = detail.get("error")
-    else:
-        message = str(detail)
-        error = None
-
-    return JSONResponse(
-        status_code=exc.status_code,
-        content= responseOTD(
-            exc.status_code,
-            message,
-            None,
-            error,
-            request.url.path
-        )
-    )
+    return JSONResponse(status_code=status_code, content=envelope)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-
-    return JSONResponse(
-        status_code=422,
-        content=responseOTD(
-            422,
-            "Dữ liệu đầu vào không hợp lệ!",
-            None,
-            exc.errors(),
-            request.url.path
-        )
+    return create_unified_response(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        message="Lỗi: Dữ liệu đầu vào không hợp lệ hoặc sai định dạng quy định!",
+        error="ERR-VAL-422: Validation error at Request Body fields constraint layout.",
+        path=request.url.path
     )
 
-@app.get(
-    "/tickets",
-    tags=["Ticket"],
-    summary="Lấy danh sách vé",
-    response_model=APIResponse,
-    status_code=status.HTTP_200_OK
-)
-def get_all_tickets(request: Request):
-
-    return responseOTD(
-        200,
-        "Lấy danh sách vé thành công!",
-        tickets_db,
-        None,
-        request.url.path
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return create_unified_response(
+        status_code=exc.status_code,
+        message=exc.detail.get("message") if isinstance(exc.detail, dict) else exc.detail,
+        error=exc.detail.get("error") if isinstance(exc.detail, dict) else None,
+        path=request.url.path
     )
 
-@app.post(
-    "/tickets",
-    tags=["Ticket"],
-    summary= "Đăng ký vé",
-    response_model=APIResponse,
-    status_code=status.HTTP_201_CREATED
-)
-def create_ticket(ticket: TicketCreate, request: Request):
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return create_unified_response(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        message="Lỗi hệ thống nghiêm trọng, vui lòng liên hệ quản trị viên!",
+        error=f"ERR-SYS-500: Internal Server Error. {str(exc)}",
+        path=request.url.path
+    )
 
-    for item in tickets_db:
-        if (
-            item["movie_name"].lower() == ticket.movie_name.lower()
-            and item["room_code"].lower() == ticket.room_code.lower()
-        ):
+def calculate_team_metrics() -> Tuple[int, int, float]:
+    total_tasks = len(tasks_db)
+    if total_tasks == 0:
+        return 0, 0, 0.0
+    
+    completed_tasks = sum(1 for task in tasks_db if task["status"] == "done")
+    completion_rate_percentage = round((completed_tasks / total_tasks) * 100, 1)
+    
+    return total_tasks, completed_tasks, completion_rate_percentage
+
+@app.get("/tasks")
+async def get_all_tasks(request: Request, status: Optional[str] = None):
+    filtered_tasks = tasks_db
+    if status:
+        filtered_tasks = [task for task in tasks_db if task["status"] == status]
+        
+    return create_unified_response(
+        status_code=status.HTTP_200_OK,
+        message="Lấy danh sách công việc thành công!",
+        data=filtered_tasks,
+        path=request.url.path
+    )
+
+@app.post("/tasks")
+async def create_task(request: Request, task_in: TaskCreateSchema):
+    for task in tasks_db:
+        if task["title"].lower() == task_in.title.lower():
             raise HTTPException(
-                status_code=400,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "message": "Lỗi: Vé xem phim tại phòng chiếu này đã được đặt!",
-                    "error": "ERR-CINE-01: Ticket conflict for movie and room combination."
+                    "message": "Lỗi: Tiêu đề công việc này đã tồn tại trong nhóm!",
+                    "error": "ERR-TASK-01: Task conflict: Title field duplicates an existing record."
                 }
             )
-
-    new_ticket = {
-        "id": len(tickets_db) + 1,
-        "movie_name": ticket.movie_name,
-        "room_code": ticket.room_code,
-        "quantity": ticket.quantity,
-        "status": "confirmed",
-        "created_at": datetime.now(timezone.utc).isoformat()
+            
+    max_id = max([task["id"] for task in tasks_db]) if tasks_db else 0
+    new_id = max_id + 1
+    
+    new_task = {
+        "id": new_id,
+        "title": task_in.title,
+        "description": task_in.description,
+        "assignee": task_in.assignee,
+        "priority": task_in.priority,
+        "status": "todo",
+        "created_at": datetime.utcnow().isoformat() + "Z"
     }
-
-    tickets_db.append(new_ticket)
-
-    return responseOTD(
-        201,
-        "Đặt vé thành công!",
-        new_ticket,
-        None,
-        request.url.path
+    
+    tasks_db.append(new_task)
+    
+    return create_unified_response(
+        status_code=status.HTTP_201_CREATED,
+        message="Khởi tạo công việc mới thành công!",
+        data=new_task,
+        path=request.url.path
     )
 
-@app.delete(
-    "/tickets/{ticket_id}",
-    tags=["Ticket"],
-    summary="Hủy đăng ký vé",
-    response_model=APIResponse,
-    status_code=status.HTTP_200_OK
-)
-def delete_ticket(ticket_id: int, request: Request):
+@app.put("/tasks/{task_id}")
+async def update_task_status(request: Request, task_id: int, status_in: TaskStatusUpdateSchema):
+    target_task = None
+    for task in tasks_db:
+        if task["id"] == task_id:
+            target_task = task
+            break
+            
+    if not target_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "message": f"Không tìm thấy công việc có ID {task_id}!",
+                "error": "ERR-TASK-03: Task not found with the provided identifier."
+            }
+        )
+        
+    if target_task["status"] == "done":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Lỗi: Không được phép cập nhật lùi trạng thái khi công việc đã hoàn thành!",
+                "error": "ERR-TASK-04: Task status mutation blocked. Completed tasks are immutable."
+            }
+        )
+        
+    target_task["status"] = status_in.status
+    
+    return create_unified_response(
+        status_code=status.HTTP_200_OK,
+        message="Cập nhật tiến độ công việc thành công!",
+        data=target_task,
+        path=request.url.path
+    )
 
-    for ticket in tickets_db:
-        if ticket["id"] == ticket_id:
-            tickets_db.remove(ticket)
-
-            return responseOTD(
-                200,
-                "Hủy vé thành công!",
-                None,
-                None,
-                request.url.path
-            )
-
-    raise HTTPException(
-        status_code=404,
-        detail={
-            "message": "Lỗi: Không tìm thấy mã vé yêu cầu!",
-            "error": "ERR-CINE-02: Ticket ID does not exist."
-        }
+@app.get("/tasks/analytics/dashboard")
+async def get_dashboard_analytics(request: Request):
+    total_tasks, completed_tasks, completion_rate_percentage = calculate_team_metrics()
+    
+    dashboard_data = {
+        "total_tasks": total_tasks,
+        "completed_tasks": completed_tasks,
+        "completion_rate_percentage": completion_rate_percentage
+    }
+    
+    return create_unified_response(
+        status_code=status.HTTP_200_OK,
+        message="Lấy số liệu thống kê hiệu suất nhóm thành công!",
+        data=dashboard_data,
+        path=request.url.path
     )
